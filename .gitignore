@@ -1,0 +1,27 @@
+# Data files
+data/*.mdb
+data/*.accdb
+
+# Temporary files
+tmp/
+.gemini/
+*.log
+
+# R specific
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+*.Rproj
+.Rapp.history
+.Rhistory
+.RData
+.Ruserdata
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Archive files
+*.zip
