@@ -16,8 +16,8 @@ The project involves extracting survey and species data from an legacy MS Access
 
 ## Repository Structure
 
-- `map_to_dwc_fast.ps1`: Core PowerShell script for high-performance mapping and CSV generation.
-- `abs_mapping_workflow.Rmd`: R Markdown project documenting the entire process with tidyverse and interactive mapping.
+- `src/map_to_dwc_fast.ps1`: Core PowerShell script for high-performance mapping and CSV generation.
+- `src/abs_mapping_workflow.Rmd`: R Markdown project documenting the entire process with tidyverse and interactive mapping.
 - `map.html`: Interactive Leaflet map for visualizing the 70,000+ survey locations.
 - `data/dwc_occurrence.csv`: The final generated Darwin Core dataset.
 - `data/map_data.js`: Clustered data for the interactive map.
@@ -27,11 +27,11 @@ The project involves extracting survey and species data from an legacy MS Access
 ### PowerShell
 Run the following command to regenerate the Darwin Core CSV:
 ```powershell
-powershell -ExecutionPolicy Bypass -File map_to_dwc_fast.ps1
+powershell -ExecutionPolicy Bypass -File src/map_to_dwc_fast.ps1
 ```
 
 ### R Markdown
-Open `abs_mapping_workflow.Rmd` in RStudio and click **Knit** to generate a full report with an interactive map.
+Open `src/abs_mapping_workflow.Rmd` in RStudio and click **Knit** to generate a full report with an interactive map.
 
 ## License
 

@@ -29,7 +29,7 @@ This report documents the workflow for mapping the **Autochtone Boomsoorten (ABS
 We connect to the MS Access database using `odbc`.
 
 ```{r connection}
-db_path <- "data/databankABS_v11-03-2013.mdb"
+db_path <- "../data/databankABS_v11-03-2013.mdb"
 
 # Connection string for Windows (ensure Access Driver is installed)
 con <- dbConnect(odbc::odbc(), 
@@ -166,7 +166,7 @@ leaflet(dwc_final %>% head(10000)) %>%
 The final Darwin Core dataset is exported to CSV.
 
 ```{r export}
-write_csv(dwc_final, "data/dwc_occurrence_r.csv", na = "")
+write_csv(dwc_final, "../data/dwc_occurrence_r.csv", na = "")
 ```
 
 ---
