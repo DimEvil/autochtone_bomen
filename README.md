@@ -19,9 +19,10 @@ The project involves extracting survey and species data from an legacy MS Access
 - `src/map_to_dwc_fast.ps1`: Core PowerShell script for high-performance mapping and CSV generation.
 - `src/abs_mapping_workflow.Rmd`: R Markdown project documenting the entire process with tidyverse and interactive mapping.
 - `map.html`: Interactive Leaflet map for visualizing the 70,000+ survey locations.
-- `data/dwc_occurrence.csv`: The final generated Darwin Core dataset.
+- `data/event_core.csv`: The primary Darwin Core Event dataset.
+- `data/occurrence_extension.csv`: The Occurrence extension linking species to events.
+- `data/measurement_or_fact.csv`: The MeasurementOrFact extension for tree attributes and site measurements.
 - `data/map_data.js`: Clustered data for the interactive map.
-
 ## Usage
 
 ### PowerShell
