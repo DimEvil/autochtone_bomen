@@ -32,11 +32,12 @@ We connect to the MS Access database using `odbc`.
 ```{r connection}
 db_path <- "../data/databankABS_v11-03-2013.mdb"
 
-# Connection string for Windows (ensure Access Driver is installed)
+# Connection string for Windows
 con <- dbConnect(odbc::odbc(), 
                  .connection_string = paste0("Driver={Microsoft Access Driver (*.mdb, *.accdb)};DBQ=", db_path))
 
 # Load relevant tables
+# We use clean_names here to standardize column names to lowercase/snake_case
 tblOpnames <- dbReadTable(con, "tblOpnames") %>% clean_names()
 tblBomenStruiken <- dbReadTable(con, "tblBomenStruiken") %>% clean_names()
 cdeBomenStruiken <- dbReadTable(con, "cdeBomenStruiken") %>% clean_names()
@@ -44,47 +45,88 @@ cdeBomenStruiken <- dbReadTable(con, "cdeBomenStruiken") %>% clean_names()
 dbDisconnect(con)
 ```
 
-## 2. Data Integration and Mapping
+## 2. Table Joins
 
-We join the tables and apply the Darwin Core mapping logic, including:
-- Extracting years from `projectcod`.
-- Parsing specific dates from the `nummer` column (YYMMDD format).
-- Mapping autochthonous status to `establishmentMeans`.
+In this step, we join the three tables. We take care to resolve any duplicate column names that might arise from the join (like `nummer`).
 
-```{r mapping}
+```{r joins}
+# Join tables
+# Note: inner_join will add .x and .y suffixes to columns with the same name (except the join keys)
+raw_joined_data <- tblOpnames %>%
+  inner_join(tblBomenStruiken, by = "proj_cod_loc_nr") %>%
+  inner_join(cdeBomenStruiken, by = c("soort" = "soort_code"))
+
+# Debug: Show column names to identify potential issues with suffixes
+print("Column names after join:")
+print(names(raw_joined_data))
+```
+
+## 3. Date Parsing Logic
+
+We define the helper function to parse specifically formatted dates from the `nummer` column.
+
+```{r date-function}
 # Helper function for date extraction
-extract_full_date <- function(nummer, fallback_year) {
-  if (is.na(nummer) || nchar(nummer) < 6) return(as.character(fallback_year))
+extract_full_date <- function(nummer_val, fallback_year) {
+  # Early exit for NA or short strings
+  if (is.na(nummer_val) || nchar(as.character(nummer_val)) < 6) return(as.character(fallback_year))
   
-  prefix <- substr(nummer, 1, 6)
+  prefix <- substr(as.character(nummer_val), 1, 6)
   yr_part <- as.numeric(substr(prefix, 1, 2))
   mo_part <- as.numeric(substr(prefix, 3, 4))
   da_part <- as.numeric(substr(prefix, 5, 6))
   
+  # Handle potential NA from numeric conversion
+  if (is.na(yr_part) || is.na(mo_part) || is.na(da_part)) return(as.character(fallback_year))
+  
   full_yr <- ifelse(yr_part > 50, 1900 + yr_part, 2000 + yr_part)
   
-  # Validate date
-  is_valid <- !is.na(mo_part) && mo_part >= 1 && mo_part <= 12 && 
-              !is.na(da_part) && da_part >= 1 && da_part <= 31
+  # Validate date components
+  is_valid <- mo_part >= 1 && mo_part <= 12 && 
+              da_part >= 1 && da_part <= 31
   
-  if (is_valid && full_yr == as.numeric(fallback_year)) {
+  # Defensive check for comparison with fallback_year
+  matches_year <- FALSE
+  if (!is.na(fallback_year) && !is.na(full_yr)) {
+    matches_year <- (full_yr == as.numeric(fallback_year))
+  }
+  
+  if (is_valid && matches_year) {
     return(sprintf("%04d-%02d-%02d", full_yr, mo_part, da_part))
   }
   return(as.character(fallback_year))
 }
+```
 
-# Mapping Logic
-dwc_data <- tblOpnames %>%
-  inner_join(tblBomenStruiken, by = "proj_cod_loc_nr") %>%
-  inner_join(cdeBomenStruiken, by = c("soort" = "soort_code")) %>%
+## 4. Darwin Core Mapping
+
+We apply the mapping logic. We use `coalesce` to find columns even if they were renamed with suffixes during the join.
+
+```{r mapping}
+dwc_data <- raw_joined_data %>%
   mutate(
-    # Year extraction
-    extracted_year = str_extract(projectcod, "\\d{4}") %>% coalesce(
-      str_extract(projectcod, "\\d{2}") %>% as.numeric() %>% 
-      { ifelse(. > 50, paste0("19", .), paste0("20", .)) }
+    # Handle potential suffixes from join
+    proj_field = coalesce(
+      if ("projectcod" %in% names(.)) projectcod else NULL,
+      if ("projectcod.x" %in% names(.)) projectcod.x else NULL,
+      if ("project_cod" %in% names(.)) project_cod else NULL
     ),
+    nummer_field = coalesce(
+      if ("nummer" %in% names(.)) nummer else NULL,
+      if ("nummer.x" %in% names(.)) nummer.x else NULL
+    ),
+    
+    # Year extraction
+    yr4 = str_extract(proj_field, "\\d{4}"),
+    yr2 = str_extract(proj_field, "\\d{2}"),
+    extracted_year = case_when(
+      !is.na(yr4) ~ yr4,
+      !is.na(yr2) ~ ifelse(as.numeric(yr2) > 50, paste0("19", yr2), paste0("20", yr2)),
+      TRUE ~ NA_character_
+    ),
+    
     # Full date extraction
-    eventDate = map2_chr(nummer, extracted_year, extract_full_date),
+    eventDate = map2_chr(nummer_field, extracted_year, extract_full_date),
     
     # Locality
     locality = paste0(coalesce(gemeente, ""), ": ", coalesce(locatie, "")) %>% str_remove("^: "),
@@ -108,7 +150,7 @@ dwc_data <- tblOpnames %>%
   ) %>%
   # Metadata
   mutate(
-    occurrenceID = paste0("INBO:VBP:ABS:OCC:", proj_cod_loc_nr, ":", row_number()),
+    occurrenceID = paste0("INBO:VBP:ABS:OCC:", str_remove_all(proj_cod_loc_nr, "\\s+"), ":", row_number()),
     basisOfRecord = "HumanObservation",
     kingdom = "Plantae",
     datasetName = "Autochtone boomsoorten en struiken in Vlaanderen",
@@ -120,9 +162,9 @@ dwc_data <- tblOpnames %>%
   )
 ```
 
-## 3. Coordinate Conversion
+## 5. Coordinate Conversion
 
-We convert Belgian Lambert 72 (EPSG:31370) coordinates to WGS84 (EPSG:4326) and round to 5 decimal places.
+We convert Belgian Lambert 72 (EPSG:31370) coordinates to WGS84 (EPSG:4326).
 
 ```{r coordinates}
 # Filter records with coordinates
@@ -134,7 +176,7 @@ abs_sf <- valid_coords %>%
   st_as_sf(coords = c("coord_hor", "coord_vert"), crs = 31370) %>%
   st_transform(4326)
 
-# Extract coordinates and round
+# Extract coordinates and round to 5 decimal places
 abs_coords <- st_coordinates(abs_sf) %>%
   as_tibble() %>%
   rename(decimalLongitude = X, decimalLatitude = Y) %>%
@@ -149,20 +191,22 @@ dwc_final <- valid_coords %>%
          datasetName, institutionCode, collectionCode, rightsHolder, license, language)
 ```
 
-## 4. Visualization
+## 6. Visualization
 
-Interactive map showing the distribution of the first 10,000 observations.
+Interactive map showing the distribution.
 
 ```{r map}
 leaflet(dwc_final %>% head(10000)) %>%
   addProviderTiles(providers$CartoDB.DarkMatter) %>%
   addMarkers(
+    lng = ~decimalLongitude, 
+    lat = ~decimalLatitude,
     clusterOptions = markerClusterOptions(),
     popup = ~paste0("<b>", vernacularName, "</b><br>", scientificName, "<br>", occurrenceRemarks)
   )
 ```
 
-## 5. Export
+## 7. Export
 
 The final Darwin Core dataset is exported to CSV.
 
