@@ -119,7 +119,7 @@ foreach ($row in $dataset.Tables[0].Rows) {
     $inheemsInfo = Get-InheemsDetails $row.INHEEMS
 
     $dwcRecord = [PSCustomObject]@{
-        occurrenceID = "INBO:VBP:ABS:OCC:" + $row.ProjCodLocNr + ":" + $count
+        occurrenceID = "INBO:VBP:ABS:OCC:" + $row.ProjCodLocNr.ToString().Replace(" ", "") + ":" + $count
         basisOfRecord = "HumanObservation"
         scientificName = $row.Latijnse_naam
         vernacularName = $row.Nederlandse_naam

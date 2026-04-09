@@ -150,7 +150,7 @@ dwc_data <- raw_joined_data %>%
   ) %>%
   # Metadata
   mutate(
-    occurrenceID = paste0("INBO:VBP:ABS:OCC:", proj_cod_loc_nr, ":", row_number()),
+    occurrenceID = paste0("INBO:VBP:ABS:OCC:", str_remove_all(proj_cod_loc_nr, "\\s+"), ":", row_number()),
     basisOfRecord = "HumanObservation",
     kingdom = "Plantae",
     datasetName = "Autochtone boomsoorten en struiken in Vlaanderen",
