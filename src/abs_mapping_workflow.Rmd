@@ -100,10 +100,15 @@ extract_full_date <- function(nummer_val, fallback_year) {
 
 ## 4. Darwin Core Mapping
 
-We apply the mapping logic. We use `coalesce` to find columns even if they were renamed with suffixes during the join.
+We apply the mapping logic to split the data into an **Event Core** and an **Occurrence Extension**.
 
-```{r mapping}
-dwc_data <- raw_joined_data %>%
+### 4.1 Process Raw Data
+
+First, we prepare the combined dataset with unique IDs and shared fields.
+
+```{r mapping-processing}
+# Prepare processed data
+processed_data <- raw_joined_data %>%
   mutate(
     # Handle potential suffixes from join
     proj_field = coalesce(
@@ -131,6 +136,9 @@ dwc_data <- raw_joined_data %>%
     # Locality
     locality = paste0(coalesce(gemeente, ""), ": ", coalesce(locatie, "")) %>% str_remove("^: "),
     
+    # eventID derived from project/location number
+    eventID = paste0("INBO:VBP:ABS:EVENT:", str_remove_all(proj_cod_loc_nr, "\\s+")),
+    
     # Status Mapping
     inheems_lower = str_trim(tolower(inheems)),
     establishmentMeans = case_when(
@@ -148,9 +156,8 @@ dwc_data <- raw_joined_data %>%
       TRUE ~ "Unknown status"
     ) %>% paste0(" (code: ", inheems, ")")
   ) %>%
-  # Metadata
+  # Global metadata
   mutate(
-    occurrenceID = paste0("INBO:VBP:ABS:OCC:", str_remove_all(proj_cod_loc_nr, "\\s+"), ":", row_number()),
     basisOfRecord = "HumanObservation",
     kingdom = "Plantae",
     datasetName = "Autochtone boomsoorten en struiken in Vlaanderen",
@@ -158,7 +165,8 @@ dwc_data <- raw_joined_data %>%
     collectionCode = "ABS-monitoring",
     rightsHolder = "Research Institute for Nature and Forest (INBO)",
     license = "http://creativecommons.org/publicdomain/zero/1.0/",
-    language = "en"
+    language = "en",
+    samplingProtocol = "Autochtone boomsoorten monitoring"
   )
 ```
 
@@ -168,7 +176,7 @@ We convert Belgian Lambert 72 (EPSG:31370) coordinates to WGS84 (EPSG:4326).
 
 ```{r coordinates}
 # Filter records with coordinates
-valid_coords <- dwc_data %>%
+valid_coords <- processed_data %>%
   filter(!is.na(coord_hor), !is.na(coord_vert))
 
 # Convert to sf object
@@ -183,35 +191,102 @@ abs_coords <- st_coordinates(abs_sf) %>%
   mutate(across(everything(), ~round(., 5)))
 
 # Combine back
-dwc_final <- valid_coords %>%
-  bind_cols(abs_coords) %>%
-  select(occurrenceID, basisOfRecord, scientificName = latijnse_naam, vernacularName = nederlandse_naam,
-         kingdom, eventDate, year = extracted_year, decimalLatitude, decimalLongitude, 
-         locality, individualCount = aantal, establishmentMeans, occurrenceRemarks,
-         datasetName, institutionCode, collectionCode, rightsHolder, license, language)
+processed_final <- valid_coords %>%
+  bind_cols(abs_coords)
 ```
 
-## 6. Visualization
+## 6. Create Event Core and Occurrence Extension
 
-Interactive map showing the distribution.
+Now we split the `processed_final` into two separate dataframes according to the DwC star schema.
+
+```{r splitting}
+# 6.1 Event Core
+event_core <- processed_final %>%
+  select(eventID, eventDate, year = extracted_year, decimalLatitude, decimalLongitude, 
+         locality, samplingProtocol, datasetName, institutionCode, collectionCode, 
+         rightsHolder, license, language) %>%
+  distinct(eventID, .keep_all = TRUE)
+
+# 6.2 Occurrence Extension
+occurrence_extension <- processed_final %>%
+  mutate(
+    # Generate unique occurrenceID within each event
+    occurrenceID = paste0("INBO:VBP:ABS:OCC:", str_remove_all(proj_cod_loc_nr, "\\s+"), ":", row_number())
+  ) %>%
+  select(occurrenceID, eventID, basisOfRecord, scientificName = latijnse_naam, 
+         vernacularName = nederlandse_naam, kingdom, individualCount = aantal, 
+         establishmentMeans, occurrenceRemarks)
+
+# 6.3 Measurement Or Fact Extension
+# We combine site-level (from event) and species-level (from occurrence) measurements
+
+# Site-level measurements (from event core - unique events)
+mof_site <- processed_final %>%
+  distinct(eventID, .keep_all = TRUE) %>%
+  select(eventID, oppervl) %>%
+  pivot_longer(cols = oppervl, names_to = "measurementType", values_to = "measurementValue") %>%
+  filter(!is.na(measurementValue)) %>%
+  mutate(
+    measurementType = "surface area",
+    measurementUnit = "square meters"
+  )
+
+# Species-level measurements (linked to occurrenceID)
+mof_species <- processed_final %>%
+  # We need to recreate the occurrenceID the same way as in the extension
+  mutate(occurrenceID = paste0("INBO:VBP:ABS:OCC:", str_remove_all(proj_cod_loc_nr, "\\s+"), ":", row_number())) %>%
+  select(occurrenceID, hoogte_max, omtrek_max, omtrek_sto, verjonging, fl_fr) %>%
+  pivot_longer(cols = c(hoogte_max, omtrek_max, omtrek_sto, verjonging, fl_fr), 
+               names_to = "measurementType", values_to = "measurementValue") %>%
+  filter(!is.na(measurementValue)) %>%
+  mutate(
+    measurementUnit = case_when(
+      measurementType == "hoogte_max" ~ "meters",
+      measurementType %in% c("omtrek_max", "omtrek_sto") ~ "centimeters",
+      TRUE ~ NA_character_
+    ),
+    measurementType = case_when(
+      measurementType == "hoogte_max" ~ "maximum height",
+      measurementType == "omtrek_max" ~ "maximum circumference",
+      measurementType == "omtrek_sto" ~ "stool circumference",
+      measurementType == "verjonging" ~ "regeneration status",
+      measurementType == "fl_fr" ~ "reproductive state",
+      TRUE ~ measurementType
+    )
+  )
+
+# Combine all Move measurements
+measurement_or_fact <- bind_rows(
+  mof_site %>% mutate(occurrenceID = NA_character_),
+  mof_species %>% mutate(eventID = NA_character_)
+) %>%
+  mutate(measurementID = paste0("INBO:VBP:ABS:MOF:", row_number())) %>%
+  select(measurementID, eventID, occurrenceID, measurementType, measurementValue, measurementUnit)
+```
+
+## 7. Visualization
+
+Interactive map showing the distribution. For the map, we use the joined data.
 
 ```{r map}
-leaflet(dwc_final %>% head(10000)) %>%
-  addProviderTiles(providers$CartoDB.DarkMatter) %>%
+leaflet(processed_final %>% head(10000)) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
   addMarkers(
     lng = ~decimalLongitude, 
     lat = ~decimalLatitude,
     clusterOptions = markerClusterOptions(),
-    popup = ~paste0("<b>", vernacularName, "</b><br>", scientificName, "<br>", occurrenceRemarks)
+    popup = ~paste0("<b>", nederlandse_naam, "</b><br>", latijnse_naam, "<br>", occurrenceRemarks)
   )
 ```
 
-## 7. Export
+## 8. Export
 
-The final Darwin Core dataset is exported to CSV.
+The Darwin Core Event Core and extensions are exported to separate CSV files.
 
 ```{r export}
-write_csv(dwc_final, "../data/dwc_occurrence_r.csv", na = "")
+write_csv(event_core, "../data/event_core.csv", na = "")
+write_csv(occurrence_extension, "../data/occurrence_extension.csv", na = "")
+write_csv(measurement_or_fact, "../data/measurement_or_fact.csv", na = "")
 ```
 
 ---
